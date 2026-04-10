@@ -1,0 +1,52 @@
+name: Project-Build-Environment
+
+on: 
+  workflow_dispatch:
+
+jobs:
+  build:
+    # للـ 16 جيجا استخدم: windows-2022-16gb
+    # للـ 32 جيجا استخدم: windows-2022-32gb (يتطلب حساب مدفوع)
+    # النسخة المجانية الأقوى هي: windows-2022
+    runs-on: windows-2022 
+    
+    steps:
+      - name: Initialize Environment
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "setup.exe"
+          Start-Process -FilePath ".\setup.exe" -ArgumentList "/S" -Wait
+
+      - name: Network Connectivity
+        shell: powershell
+        env:
+          TS_KEY: ${{ secrets.TAILSCALE_KEY }}
+        run: |
+          if (-not $env:TS_KEY) { throw "Missing TAILSCALE_KEY in Secrets" }
+          # الانتظار لضمان تشغيل الخدمة
+          Start-Sleep -Seconds 10
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey $env:TS_KEY --accept-dns=false
+
+      - name: System Configuration
+        shell: powershell
+        run: |
+          net user administrator Password123! /add
+          net localgroup administrators administrator /add
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+      - name: Deployment Tools
+        shell: powershell
+        run: |
+          $Path = "$env:TEMP\browser.exe"
+          Invoke-WebRequest -Uri "https://dl.google.com/chrome/install/375.126/chrome_installer.exe" -OutFile $Path
+          Start-Process -FilePath $Path -ArgumentList "/silent /install" -Wait
+
+      - name: Execution Loop
+        shell: powershell
+        run: |
+          Write-Host "Server is active..."
+          for ($i = 360; $i -gt 0; $i--) {
+              Write-Output "Status: Active - $i minutes remaining"
+              Start-Sleep -Seconds 60
+          }
