@@ -11,7 +11,9 @@ jobs:
     steps:
       - name: Maximize System Performance
         run: |
+          # Set Power Plan to High Performance
           powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          # Disable visual effects for lower RDP latency
           reg add "HKCU\Control Panel\Desktop" /v UserPreferencesMask /t REG_BINARY /d 9012038010000000 /f
           reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFXSetting /t REG_DWORD /d 2 /f
 
@@ -19,12 +21,12 @@ jobs:
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          netsh advfirewall firewall add rule name="RDP-Port" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User (Complexity Bypass)
         run: |
+          # Disable password complexity to allow "Ender"
           secedit /export /cfg config.inf
           (Get-Content config.inf) -replace 'PasswordComplexity = 1', 'PasswordComplexity = 0' | Set-Content config.inf
           (Get-Content config.inf) -replace 'MinimumPasswordLength = .+', 'MinimumPasswordLength = 0' | Set-Content config.inf
@@ -37,22 +39,28 @@ jobs:
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           echo "TAILSCALE_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Tailscale
-        uses: tailscale/github-action@v2
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
-          hostname: gh-highperf-${{ github.run_id }}
+      - name: Install and Connect Tailscale
+        run: |
+          # Download and install Tailscale silently
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "tailscale.msi"
+          Start-Process msiexec.exe -ArgumentList "/i tailscale.msi /qn /norestart" -Wait
+          
+          # Force start the service and login
+          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-highperf-${{ github.run_id }}
+          
+          $tsIP = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4)
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
       - name: Maintain Connection
         run: |
-          $tsIP = (tailscale ip -4)
-          Write-Host "`n=== RDP PERFORMANCE MODE ==="
-          Write-Host "Address: $tsIP"
+          Write-Host "`n=== RDP ACCESS DETAILS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: RDP"
           Write-Host "Password: $env:TAILSCALE_PASS"
-          Write-Host "Cores Detected: $(Get-CimInstance Win32_Processor | Select-Object -ExpandProperty NumberOfCores)"
-          Write-Host "============================`n"
+          Write-Host "Cores: $(Get-CimInstance Win32_Processor | Select-Object -ExpandProperty NumberOfCores)"
+          Write-Host "==========================`n"
           
           while ($true) {
+              Write-Host "[$(Get-Date)] Runner Active..."
               Start-Sleep -Seconds 300
           }
