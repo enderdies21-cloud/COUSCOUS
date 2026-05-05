@@ -1,52 +1,64 @@
-name: Project-Build-Environment
+name: RDP-High-Performance
 
-on: 
+on:
   workflow_dispatch:
 
 jobs:
-  build:
-    # للـ 16 جيجا استخدم: windows-2022-16gb
-    # للـ 32 جيجا استخدم: windows-2022-32gb (يتطلب حساب مدفوع)
-    # النسخة المجانية الأقوى هي: windows-2022
-    runs-on: windows-2022 
-    
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
     steps:
-      - name: Initialize Environment
-        shell: powershell
+      - name: Maximize System Performance
         run: |
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "setup.exe"
-          Start-Process -FilePath ".\setup.exe" -ArgumentList "/S" -Wait
+          # Set Power Plan to High Performance
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          
+          # Adjust Visual Effects for Performance (Disable animations/smoothing)
+          reg add "HKCU\Control Panel\Desktop" /v UserPreferencesMask /t REG_BINARY /d 9012038010000000 /f
+          reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFXSetting /t REG_DWORD /d 2 /f
 
-      - name: Network Connectivity
-        shell: powershell
-        env:
-          TS_KEY: ${{ secrets.TAILSCALE_KEY }}
+      - name: Configure Core RDP Settings
         run: |
-          if (-not $env:TS_KEY) { throw "Missing TAILSCALE_KEY in Secrets" }
-          # الانتظار لضمان تشغيل الخدمة
-          Start-Sleep -Seconds 10
-          & "C:\Program Files\Tailscale\tailscale.exe" up --authkey $env:TS_KEY --accept-dns=false
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          
+          # Firewall optimization
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
 
-      - name: System Configuration
-        shell: powershell
+      - name: Create RDP User
         run: |
-          net user administrator Password123! /add
-          net localgroup administrators administrator /add
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          $password = "Ender"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires -Description "High Performance User"
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          
+          echo "TAILSCALE_PASS=$password" >> $env:GITHUB_ENV
 
-      - name: Deployment Tools
-        shell: powershell
+      - name: Install and Connect Tailscale
         run: |
-          $Path = "$env:TEMP\browser.exe"
-          Invoke-WebRequest -Uri "https://dl.google.com/chrome/install/375.126/chrome_installer.exe" -OutFile $Path
-          Start-Process -FilePath $Path -ArgumentList "/silent /install" -Wait
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-highperf-$env:GITHUB_RUN_ID
+          
+          $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4)
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Execution Loop
-        shell: powershell
+      - name: Maintain Connection
         run: |
-          Write-Host "Server is active..."
-          for ($i = 360; $i -gt 0; $i--) {
-              Write-Output "Status: Active - $i minutes remaining"
-              Start-Sleep -Seconds 60
+          Write-Host "`n=== RDP PERFORMANCE MODE ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $env:TAILSCALE_PASS"
+          Write-Host "Cores Detected: $(Get-CimInstance Win32_Processor | Select-Object -ExpandProperty NumberOfCores)"
+          Write-Host "============================`n"
+          
+          while ($true) {
+              Start-Sleep -Seconds 300
           }
